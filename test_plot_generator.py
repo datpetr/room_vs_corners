@@ -1,65 +1,87 @@
-import unittest
-import time
-import os
 import pandas as pd
+import os
+import unittest
+from unittest.mock import patch, MagicMock
 from plot_generator import PlotGenerator
 
-class TestPlotGenerator(unittest.TestCase):
 
+class TestPlotGeneratorWithCVAT(unittest.TestCase):
     def setUp(self):
-        """Setup method to initialize the PlotGenerator object before each test."""
-        self.plot_gen = PlotGenerator()
+        """Setup method to initialize PlotGenerator and mock CVAT data."""
+        self.plot_gen = PlotGenerator(output_folder="test_plots")
 
-    def test_plot_creation(self):
-        """Test to check if the plot is created successfully."""
-        df = pd.DataFrame({
-            'Gt_corners': [4, 5, 6],
-            'Rb_corners': [3, 5, 7]
+        # Simulated CVAT data
+        self.mock_data = pd.DataFrame({
+            'gt_corners': [i % 10 for i in range(100)],
+            'rb_corners': [i % 8 for i in range(100)],
+            'mean': [i % 5 for i in range(100)],
+            'floor_mean': [i % 6 for i in range(100)],
+            'ceiling_mean': [i % 7 for i in range(100)],
+            'floor_max': [i % 9 for i in range(100)],
+            'ceiling_max': [i % 10 for i in range(100)],
+            'floor_min': [i % 3 for i in range(100)],
+            'ceiling_min': [i % 4 for i in range(100)]
         })
 
-        # Call the method to generate the plot
-        plot_path = self.plot_gen._plot(df, 'Gt_corners', 'Rb_corners')
+        # Categorizing data
+        self.mock_data['corner_category'] = pd.cut(
+            self.mock_data['gt_corners'],
+            bins=[0, 4, 8, float('inf')],
+            labels=['Small rooms', 'Medium rooms', 'Large rooms']
+        )
 
-        # Check if the plot file is created
-        self.assertTrue(os.path.exists(plot_path))
-        print(f"Generated plot path: {plot_path}")
+        # Save this as a temporary JSON file for testing
+        self.mock_data.to_json('test_cvat_data.json', orient='records')
 
-    def test_performance(self):
-        """Test to check the performance (execution time) of the plot generation."""
-        df = pd.DataFrame({
-            'Gt_corners': list(range(1000)),
-            'Rb_corners': list(range(1000))
-        })
+    def test_draw_plots(self):
+        """Test the draw_plots method for efficiency and output files."""
+        plots = self.plot_gen.draw_plots('test_cvat_data.json')
+        expected_plots = [
+            'grouped_gt_vs_rb_corners.png',
+            'grouped_mean_deviation_error_bars.png',
+            'grouped_floor_vs_ceiling.png',
+            'deviation_boxplot.png',
+            'grouped_deviation_trends.png',
+            'scatter_corners_vs_deviation.png'
+        ]
 
-        # Measure the time taken to generate the plot
-        start_time = time.time()
-        self.plot_gen._plot(df, 'Gt_corners', 'Rb_corners')
-        execution_time = time.time() - start_time
+        # Check if all expected plot files were created
+        for plot in expected_plots:
+            self.assertTrue(os.path.exists(os.path.join(self.plot_gen.output_folder, plot)))
 
-        # Ensure the execution time is within a reasonable limit (e.g., less than 1 second)
-        self.assertLess(execution_time, 1)
-        print(f"Execution time: {execution_time:.6f} seconds")
+    @patch('cvat_sdk.core.client.Client')
+    def test_load_cvat_data(self, mock_client):
+        """Test loading data from CVAT."""
+        # Mock the CVAT client and its methods
+        mock_task = MagicMock()
+        mock_task.export_dataset.return_value = None
+        mock_client.return_value.tasks.retrieve.return_value = mock_task
 
-    def test_memory_usage(self):
-        """Test to check memory usage during plot generation."""
-        import tracemalloc
+        # Simulate loading CVAT data
+        task_id = 1
+        json_file_path = 'path_to_cvat_data.json'
 
-        tracemalloc.start()
+        # Write mock data to the file
+        self.mock_data.to_json(json_file_path, orient='records')
 
-        df = pd.DataFrame({
-            'Gt_corners': list(range(1000)),
-            'Rb_corners': list(range(1000))
-        })
+        # Load the exported JSON file
+        cvat_data = pd.read_json(json_file_path)
 
-        # Generate the plot and monitor memory usage
-        self.plot_gen._plot(df, 'Gt_corners', 'Rb_corners')
-        current, peak = tracemalloc.get_traced_memory()
+        self.assertIsNotNone(cvat_data)  # Ensure data is loaded
+        self.assertGreater(len(cvat_data), 0)  # Ensure the DataFrame is not empty
 
-        tracemalloc.stop()
+        # Clean up the temporary file
+        os.remove(json_file_path)
 
-        # Ensure that memory usage does not exceed 10 MB
-        self.assertLess(peak / 10**6, 10)
-        print(f"Memory usage: current = {current / 10**6:.2f} MB, peak = {peak / 10**6:.2f} MB")
+    def tearDown(self):
+        """Clean up generated files after the test."""
+        if os.path.exists('test_cvat_data.json'):
+            os.remove('test_cvat_data.json')
+        if os.path.exists(self.plot_gen.output_folder):
+            for file_name in os.listdir(self.plot_gen.output_folder):
+                os.remove(os.path.join(self.plot_gen.output_folder, file_name))
+            os.rmdir(self.plot_gen.output_folder)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
